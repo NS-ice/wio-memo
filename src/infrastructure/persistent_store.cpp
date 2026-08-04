@@ -91,8 +91,9 @@ bool PersistentStore::save(const TaskList &tasks) {
 }
 
 bool PersistentStore::saveSettings(const TaskList &tasks, const DeviceSettings &settings) {
+  if (!write(tasks, settings)) return false;
   settings_ = settings;
-  return write(tasks, settings_);
+  return true;
 }
 
 bool PersistentStore::write(const TaskList &tasks, const DeviceSettings &settings) {

@@ -1065,8 +1065,12 @@ void DeviceUi::completeNextEvent(lv_event_t *event) {
   const uint8_t count = self->taskService_.sortedPendingIndices(indices, kMaxTasks);
   if (count) {
     const uint32_t id = self->tasks_.items[indices[0]].id;
+    const TaskList previous = self->tasks_;
     self->taskService_.setStatus(id, TaskStatus::Completed, 0);
-    self->store_.save(self->tasks_);
+    if (!self->store_.save(self->tasks_)) {
+      self->tasks_ = previous;
+      Serial.println("Failed to save completed task");
+    }
     self->refreshTasks();
   }
 }

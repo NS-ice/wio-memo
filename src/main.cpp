@@ -1,7 +1,6 @@
 #include <Arduino.h>
 #include <ArduinoJson.h>
 #include <DNSServer.h>
-#include <HTTPClient.h>
 #include <RTC_SAMD51.h>
 #include <Seeed_Arduino_FreeRTOS.h>
 #include <Seeed_mbedtls.h>
@@ -36,11 +35,13 @@
 namespace {
 
 constexpr uint32_t NTP_RESYNC_MS = 6UL * 60UL * 60UL * 1000UL;
+constexpr uint32_t NTP_RETRY_MS = 5UL * 60UL * 1000UL;
 constexpr uint32_t UI_STATUS_REFRESH_MS = 500;
 constexpr uint32_t WEATHER_REFRESH_MS = 30UL * 60UL * 1000UL;
 constexpr uint32_t WEATHER_RETRY_MS = 5UL * 60UL * 1000UL;
 constexpr uint32_t NETWORK_STAGE_GAP_MS = 750;
 constexpr uint32_t NETWORK_CONNECT_TIMEOUT_MS = 10000;
+constexpr uint32_t NETWORK_RECONNECT_DELAY_MS = 5000;
 constexpr uint16_t NTP_LOCAL_PORT = 2390;
 constexpr uint32_t NTP_UNIX_DELTA = 2208988800UL;
 constexpr uint8_t BUNDLED_NETWORK_APPLIED = 0xA8;
@@ -92,6 +93,7 @@ bool weatherFetchPending = true;
 uint32_t lastWeatherFetchMs = 0;
 uint32_t lastCooperativeSnapshotMs = 0;
 bool ntpSyncPending = false;
+bool wifiScanPending = false;
 enum class WeatherFetchStage : uint8_t { Idle, Location, Forecast, AirQuality, RetryWait };
 WeatherFetchStage weatherFetchStage = WeatherFetchStage::Idle;
 uint32_t weatherStageDueMs = 0;
@@ -122,6 +124,7 @@ void publishNetworkSnapshot();
 void startWeatherFetch(uint32_t now);
 void serviceWeatherFetch(uint32_t now);
 void stopNetwork();
+void checkReminders();
 
 void applyBundledNetworkDefaults() {
   if (!WIFI_SSID[0]) return;
@@ -130,42 +133,18 @@ void applyBundledNetworkDefaults() {
   if (deviceSettings.networkConfigured &&
       deviceSettings.reserved == BUNDLED_NETWORK_APPLIED) return;
   if (deviceSettings.networkConfigured && !WIFI_FORCE_PROVISION) return;
-  strlcpy(deviceSettings.stationSsid, WIFI_SSID, sizeof(deviceSettings.stationSsid));
-  strlcpy(deviceSettings.stationPassword, WIFI_PASSWORD, sizeof(deviceSettings.stationPassword));
-  deviceSettings.utcOffsetMinutes = LOCAL_UTC_OFFSET_MINUTES;
-  deviceSettings.networkConfigured = 1;
-  deviceSettings.reserved = BUNDLED_NETWORK_APPLIED;
-  persistentStore.saveSettings(taskList, deviceSettings);
+  wio_memo::DeviceSettings updated = deviceSettings;
+  strlcpy(updated.stationSsid, WIFI_SSID, sizeof(updated.stationSsid));
+  strlcpy(updated.stationPassword, WIFI_PASSWORD, sizeof(updated.stationPassword));
+  updated.utcOffsetMinutes = LOCAL_UTC_OFFSET_MINUTES;
+  updated.networkConfigured = 1;
+  updated.reserved = BUNDLED_NETWORK_APPLIED;
+  if (persistentStore.saveSettings(taskList, updated)) {
+    deviceSettings = updated;
+  } else {
+    Serial.println("Failed to save bundled network settings");
+  }
 }
-
-const char INDEX_HTML[] PROGMEM = R"HTML(
-<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Wio 桌面备忘录</title><style>
-:root{font-family:system-ui,sans-serif;color:#1d2939;background:#f2f4f7}body{margin:0}
-main{max-width:760px;margin:auto;padding:20px}.head{display:flex;justify-content:space-between;align-items:center}
-h1{font-size:24px}.status{font-size:13px;color:#667085}.card{background:white;border-radius:14px;padding:16px;margin:12px 0;box-shadow:0 2px 8px #10182812}
-form{display:grid;grid-template-columns:1fr 140px;gap:10px}input,select,button{box-sizing:border-box;border:1px solid #d0d5dd;border-radius:9px;padding:10px;font:inherit}
-input[type=text]{grid-column:1/-1}.actions{grid-column:1/-1;display:flex;gap:8px}button{cursor:pointer;background:#fff}.primary{background:#175cd3;color:#fff;border-color:#175cd3}
-.item{display:grid;grid-template-columns:28px 1fr auto;gap:9px;align-items:center;border-bottom:1px solid #eaecf0;padding:12px 0}.item:last-child{border:0}.done .name{text-decoration:line-through;color:#98a2b3}.meta{font-size:12px;color:#667085;margin-top:4px}.danger{color:#b42318}.empty{text-align:center;color:#98a2b3;padding:28px}
-@media(max-width:540px){form{grid-template-columns:1fr}.actions,input[type=text]{grid-column:1}.head{align-items:flex-start;flex-direction:column}}
-</style></head><body><main><div class="head"><h1>Wio 桌面备忘录</h1><div class="status" id="status">正在连接设备…</div></div>
-<section class="card"><form id="form"><input id="title" type="text" maxlength="48" required placeholder="事项标题（设备端首版建议使用英文）">
-<select id="kind"><option value="0">待办</option><option value="1">会议</option></select><input id="due" type="datetime-local" required>
-<select id="reminder"><option value="0">准时提醒</option><option value="5">提前 5 分钟</option><option value="10">提前 10 分钟</option><option value="30">提前 30 分钟</option></select>
-<div class="actions"><button class="primary" type="submit">添加事项</button><button type="button" id="sync">刷新</button></div></form></section>
-<section class="card"><div id="list"></div></section></main><script>
-let tasks=[];const $=s=>document.querySelector(s);const esc=s=>{const d=document.createElement('div');d.textContent=s;return d.innerHTML};
-function fmt(epoch){return new Date(epoch*1000).toLocaleString([], {month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'})}
-async function load(){try{const r=await fetch('/api/tasks');if(!r.ok)throw Error(r.status);const j=await r.json();tasks=j.tasks||[];$('#status').textContent=`设备时间：${j.now?new Date(j.now*1000).toLocaleString():'等待 NTP'} · ${j.ip}`;render()}catch(e){$('#status').textContent='连接失败：'+e.message}}
-async function save(){const r=await fetch('/api/tasks',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({tasks})});if(!r.ok){alert('保存失败：'+await r.text());return false}await load();return true}
-function render(){tasks.sort((a,b)=>a.completed-b.completed||a.dueUtc-b.dueUtc);$('#list').innerHTML=tasks.length?tasks.map((t,i)=>`<div class="item ${t.completed?'done':''}"><input type="checkbox" ${t.completed?'checked':''} onchange="toggle(${i})"><div><div class="name">${esc(t.title)}</div><div class="meta">${t.kind?'会议':'待办'} · ${fmt(t.dueUtc)}${t.reminderMinutes?' · 提前 '+t.reminderMinutes+' 分钟':''}</div></div><button class="danger" onclick="delTask(${i})">删除</button></div>`).join(''):'<div class="empty">还没有事项</div>'}
-window.toggle=async i=>{tasks[i].completed=!tasks[i].completed;await save()};window.delTask=async i=>{if(confirm('删除这条事项？')){tasks.splice(i,1);await save()}};
-$('#form').onsubmit=async e=>{e.preventDefault();if(tasks.length>=12)return alert('设备最多保存 12 条事项');tasks.push({id:Date.now()>>>0,title:$('#title').value.trim(),kind:+$('#kind').value,dueUtc:Math.floor(new Date($('#due').value).getTime()/1000),reminderMinutes:+$('#reminder').value,completed:false});if(await save()){e.target.reset();setDefaultTime()}};
-function setDefaultTime(){const d=new Date(Date.now()+3600000);d.setMinutes(Math.ceil(d.getMinutes()/5)*5,0,0);$('#due').value=new Date(d-d.getTimezoneOffset()*60000).toISOString().slice(0,16)}
-$('#sync').onclick=load;setDefaultTime();load();setInterval(load,30000);
-</script></body></html>
-)HTML";
 
 void jsonError(int code, const char *message) {
   JsonDocument doc;
@@ -201,9 +180,28 @@ void handleGetDevice() {
 }
 
 void handleWifiScan() {
-  if (apMode) WiFi.mode(WIFI_AP_STA);
-  const int count = WiFi.scanNetworks(false, true);
+  if (!wifiScanPending) {
+    if (apMode) WiFi.mode(WIFI_AP_STA);
+    WiFi.scanDelete();
+    const int started = WiFi.scanNetworks(true, true);
+    if (started < 0 && started != WIFI_SCAN_RUNNING) {
+      return jsonError(500, "failed to start Wi-Fi scan");
+    }
+    wifiScanPending = true;
+  }
+
+  const int count = WiFi.scanComplete();
+  if (count == WIFI_SCAN_RUNNING) {
+    server.send(202, "application/json; charset=utf-8", "{\"scanning\":true}");
+    return;
+  }
+  wifiScanPending = false;
+  if (count < 0) {
+    WiFi.scanDelete();
+    return jsonError(500, "Wi-Fi scan failed");
+  }
   JsonDocument doc;
+  doc["scanning"] = false;
   JsonArray networks = doc["networks"].to<JsonArray>();
   for (int index = 0; index < count && index < 16; ++index) {
     const String ssid = WiFi.SSID(index);
@@ -241,19 +239,19 @@ void handlePutNetwork() {
       utcOffset < -720 || utcOffset > 840) {
     return jsonError(422, "invalid network settings");
   }
-  strlcpy(deviceSettings.stationSsid, stationSsid, sizeof(deviceSettings.stationSsid));
+  wio_memo::DeviceSettings updated = deviceSettings;
+  strlcpy(updated.stationSsid, stationSsid, sizeof(updated.stationSsid));
   if (stationPasswordLength) {
-    strlcpy(deviceSettings.stationPassword, stationPassword,
-            sizeof(deviceSettings.stationPassword));
+    strlcpy(updated.stationPassword, stationPassword, sizeof(updated.stationPassword));
   }
-  strlcpy(deviceSettings.accessPointSsid, apSsid, sizeof(deviceSettings.accessPointSsid));
-  strlcpy(deviceSettings.accessPointPassword, apPassword,
-          sizeof(deviceSettings.accessPointPassword));
-  deviceSettings.utcOffsetMinutes = static_cast<int16_t>(utcOffset);
-  deviceSettings.networkConfigured = 1;
-  if (!persistentStore.saveSettings(taskList, deviceSettings)) {
+  strlcpy(updated.accessPointSsid, apSsid, sizeof(updated.accessPointSsid));
+  strlcpy(updated.accessPointPassword, apPassword, sizeof(updated.accessPointPassword));
+  updated.utcOffsetMinutes = static_cast<int16_t>(utcOffset);
+  updated.networkConfigured = 1;
+  if (!persistentStore.saveSettings(taskList, updated)) {
     return jsonError(500, "failed to save settings");
   }
+  deviceSettings = updated;
   JsonDocument response;
   response["status"] = "saved";
   response["next"] = "connecting";
@@ -329,10 +327,14 @@ void handlePutTasks() {
     target.status = (item["completed"] | false) ? wio_memo::TaskStatus::Completed
                                                 : wio_memo::TaskStatus::Pending;
   }
+  const wio_memo::TaskList previous = taskList;
   if (taskService.replaceAll(incoming, count) != wio_memo::TaskResult::Ok) {
     return jsonError(422, "invalid task fields");
   }
-  persistentStore.save(taskList);
+  if (!persistentStore.save(taskList)) {
+    taskList = previous;
+    return jsonError(500, "failed to save tasks");
+  }
   selectedVisible = 0;
   if (deviceUi.page() == wio_memo::UiPage::Home ||
       deviceUi.page() == wio_memo::UiPage::Tasks) {
@@ -341,9 +343,21 @@ void handlePutTasks() {
   server.send(204);
 }
 
+void handleWebPage() {
+  constexpr size_t kPageSize = sizeof(wio_memo::kWebPage) - 1;
+  constexpr size_t kChunkSize = 768;
+  server.setContentLength(kPageSize);
+  server.send(200, "text/html; charset=utf-8", "");
+  for (size_t offset = 0; offset < kPageSize; offset += kChunkSize) {
+    const size_t remaining = kPageSize - offset;
+    server.sendContent_P(wio_memo::kWebPage + offset,
+                         remaining < kChunkSize ? remaining : kChunkSize);
+    delay(1);
+  }
+}
+
 void setupWebServer() {
-  server.on("/", HTTP_GET,
-            [] { server.send_P(200, "text/html; charset=utf-8", wio_memo::kWebPage); });
+  server.on("/", HTTP_GET, handleWebPage);
   auto redirectToPortal = [] {
     server.sendHeader("Location", "http://192.168.5.1/", true);
     server.send(302, "text/plain; charset=utf-8", "Open Wio Memo");
@@ -390,11 +404,28 @@ bool syncNtp() {
           return true;
         }
       }
+      checkReminders();
+      buzzer.update(millis());
       lvglPort.update(millis());
       delay(10);
     }
   }
   return false;
+}
+
+void serviceNtp(uint32_t now) {
+  if (!stationMode || WiFi.status() != WL_CONNECTED) return;
+  if (!ntpSyncPending &&
+      wio_memo::ClockPolicy::intervalElapsed(now, lastNtpAttemptMs, NTP_RESYNC_MS)) {
+    ntpSyncPending = true;
+  }
+  if (!ntpSyncPending) return;
+  if (lastNtpAttemptMs != 0 &&
+      !wio_memo::ClockPolicy::intervalElapsed(now, lastNtpAttemptMs, NTP_RETRY_MS)) {
+    return;
+  }
+  lastNtpAttemptMs = now;
+  if (syncNtp()) ntpSyncPending = false;
 }
 
 void startAccessPoint() {
@@ -434,14 +465,26 @@ void connectNetwork() {
 }
 
 void updateNetwork() {
+  const uint32_t now = millis();
   if (networkReconfigurePending &&
-      static_cast<int32_t>(millis() - networkReconfigureAtMs) >= 0) {
+      static_cast<int32_t>(now - networkReconfigureAtMs) >= 0) {
     networkReconfigurePending = false;
     if (deferredNetworkCommand == NetworkCommand::Connect) connectNetwork();
     else if (deferredNetworkCommand == NetworkCommand::AccessPoint) startAccessPoint();
     else stopNetwork();
   }
-  const uint32_t now = millis();
+  if (stationMode && WiFi.status() != WL_CONNECTED) {
+    if (webRoutesConfigured) server.stop();
+    stationMode = false;
+    networkConnecting = false;
+    weatherFetchPending = false;
+    weatherFetchStage = WeatherFetchStage::Idle;
+    networkTransition = NetworkTransition::StopForStation;
+    networkTransitionDueMs = now + NETWORK_RECONNECT_DELAY_MS;
+    ntpSyncPending = true;
+    publishNetworkSnapshot();
+    return;
+  }
   if (networkTransition == NetworkTransition::StopForStation ||
       networkTransition == NetworkTransition::StopForAccessPoint ||
       networkTransition == NetworkTransition::StopForOffline) {
@@ -491,9 +534,7 @@ void updateNetwork() {
     networkConnecting = false;
     if (webRoutesConfigured) server.begin();
     publishNetworkSnapshot();
-    // Weather response carries local time and updates the RTC without a second
-    // DNS-dependent NTP request.
-    ntpSyncPending = false;
+    ntpSyncPending = true;
     lastNtpAttemptMs = 0;
     Serial.print("Wio Memo LAN: http://");
     Serial.println(WiFi.localIP());
@@ -523,28 +564,6 @@ void requestNetworkCommand(NetworkCommand command) {
   else stopNetwork();
 }
 
-bool getJson(const String &url, JsonDocument &document, const char *hostHeader = nullptr) {
-  WiFiClient client;
-  HTTPClient http;
-  http.setConnectTimeout(1000);
-  http.setTimeout(1600);
-  http.useHTTP10(true);
-  lvglPort.update(millis());
-  if (!http.begin(client, url)) return false;
-  if (hostHeader && hostHeader[0]) http.addHeader("Host", hostHeader);
-  http.addHeader("Accept", "application/json");
-  const int status = http.GET();
-  if (status != HTTP_CODE_OK) {
-    http.end();
-    return false;
-  }
-  const String payload = http.getString();
-  http.end();
-  const bool valid = deserializeJson(document, payload) == DeserializationError::Ok;
-  lvglPort.update(millis());
-  return valid;
-}
-
 bool getJsonFromIp(IPAddress address, const char *host, const String &path,
                    JsonDocument &document) {
   WiFiClient client;
@@ -561,6 +580,8 @@ bool getJsonFromIp(IPAddress address, const char *host, const String &path,
   while ((client.connected() || client.available()) && millis() - started < 3000) {
     while (client.available()) response += static_cast<char>(client.read());
     server.handleClient();
+    checkReminders();
+    buzzer.update(millis());
     lvglPort.update(millis());
     delay(1);
   }
@@ -575,9 +596,10 @@ bool getJsonFromIp(IPAddress address, const char *host, const String &path,
 
 bool fetchLocation() {
   JsonDocument location;
-  const String url =
-      "http://ip-api.com/json/?fields=status,message,city,lat,lon,offset&lang=zh-CN";
-  if (!getJson(url, location) || strcmp(location["status"] | "", "success") != 0) return false;
+  const String path = "/json/?fields=status,message,city,lat,lon,offset&lang=zh-CN";
+  if (!getJsonFromIp(IPAddress(208, 95, 112, 1), "ip-api.com", path, location) ||
+      strcmp(location["status"] | "", "success") != 0)
+    return false;
   const float latitude = location["lat"] | weatherLatitude;
   const float longitude = location["lon"] | weatherLongitude;
   if (latitude < -90.0F || latitude > 90.0F || longitude < -180.0F || longitude > 180.0F)
@@ -589,8 +611,9 @@ bool fetchLocation() {
   const int offsetMinutes = (location["offset"] | 28800) / 60;
   if (offsetMinutes >= -720 && offsetMinutes <= 840 &&
       deviceSettings.utcOffsetMinutes != offsetMinutes) {
-    deviceSettings.utcOffsetMinutes = static_cast<int16_t>(offsetMinutes);
-    persistentStore.saveSettings(taskList, deviceSettings);
+    wio_memo::DeviceSettings updated = deviceSettings;
+    updated.utcOffsetMinutes = static_cast<int16_t>(offsetMinutes);
+    if (persistentStore.saveSettings(taskList, updated)) deviceSettings = updated;
   }
   Serial.print("IP location: ");
   Serial.println(weatherCity);
@@ -605,7 +628,7 @@ bool fetchForecast() {
   path += "&longitude=";
   path += String(weatherLongitude, 4);
   path += "&current=temperature_2m,relative_humidity_2m,weather_code,wind_speed_10m";
-  path += "&daily=weather_code,temperature_2m_max,temperature_2m_min&forecast_days=4&timezone=Asia%2FShanghai";
+  path += "&daily=weather_code,temperature_2m_max,temperature_2m_min&forecast_days=4&timezone=auto";
   JsonDocument weather;
   if (!getJsonFromIp(IPAddress(188, 40, 99, 226), "api.open-meteo.com", path, weather) ||
       !weather["current"].is<JsonObject>())
@@ -617,11 +640,15 @@ bool fetchForecast() {
   cachedWindSpeed = static_cast<uint16_t>(round(current["wind_speed_10m"].as<float>()));
   const char *localIso = current["time"] | "";
   int year = 0, month = 0, day = 0, hour = 0, minute = 0;
-  if (sscanf(localIso, "%d-%d-%dT%d:%d", &year, &month, &day, &hour, &minute) == 5) {
+  if (!clockValid &&
+      sscanf(localIso, "%d-%d-%dT%d:%d", &year, &month, &day, &hour, &minute) == 5) {
     const uint32_t localEpoch = DateTime(year, month, day, hour, minute, 0).unixtime();
-    rtc.adjust(DateTime(localEpoch - 8UL * 60UL * 60UL));
-    clockValid = true;
-    ntpSyncPending = false;
+    const int32_t utcOffsetSeconds = weather["utc_offset_seconds"] | 0;
+    const int64_t utcEpoch = static_cast<int64_t>(localEpoch) - utcOffsetSeconds;
+    if (utcEpoch >= wio_memo::kMinimumValidEpoch && utcEpoch <= 0xFFFFFFFFLL) {
+      rtc.adjust(DateTime(static_cast<uint32_t>(utcEpoch)));
+      clockValid = true;
+    }
   }
   deviceUi.setWeather(weatherCity, cachedTemperature, cachedHumidity, cachedAqi,
                       cachedWindSpeed, cachedWeatherCode, true);
@@ -651,13 +678,17 @@ bool fetchForecast() {
 }
 
 bool fetchAirQuality() {
-  String url = "http://air-quality-api.open-meteo.com/v1/air-quality?latitude=";
-  url += String(weatherLatitude, 4);
-  url += "&longitude=";
-  url += String(weatherLongitude, 4);
-  url += "&current=us_aqi&timezone=auto";
+  // Use the IPv4 endpoint with an explicit Host header, matching fetchForecast,
+  // so rpcWiFi's blocking DNS resolver is never invoked on the cooperative loop.
+  String path = "/v1/air-quality?latitude=";
+  path += String(weatherLatitude, 4);
+  path += "&longitude=";
+  path += String(weatherLongitude, 4);
+  path += "&current=us_aqi&timezone=auto";
   JsonDocument air;
-  if (!getJson(url, air) || !air["current"].is<JsonObject>()) return false;
+  if (!getJsonFromIp(IPAddress(152, 53, 84, 73), "air-quality-api.open-meteo.com", path, air) ||
+      !air["current"].is<JsonObject>())
+    return false;
   cachedAqi = static_cast<uint16_t>(round(air["current"]["us_aqi"].as<float>()));
   deviceUi.setWeather(weatherCity, cachedTemperature, cachedHumidity, cachedAqi,
                       cachedWindSpeed, cachedWeatherCode, true);
@@ -666,7 +697,7 @@ bool fetchAirQuality() {
 
 void startWeatherFetch(uint32_t now) {
   weatherFetchPending = true;
-  weatherFetchStage = WeatherFetchStage::Forecast;
+  weatherFetchStage = WeatherFetchStage::Location;
   weatherStageDueMs = now + NETWORK_STAGE_GAP_MS;
 }
 
@@ -680,9 +711,10 @@ void serviceWeatherFetch(uint32_t now) {
     weatherStageDueMs = millis() + NETWORK_STAGE_GAP_MS;
   } else if (weatherFetchStage == WeatherFetchStage::Forecast) {
     if (fetchForecast()) {
-      weatherFetchPending = false;
-      weatherFetchStage = WeatherFetchStage::Idle;
-      lastWeatherFetchMs = millis();
+      // Chain into the air-quality stage instead of finishing, so AQI is
+      // actually fetched. A failure there is non-fatal and still ends the cycle.
+      weatherFetchStage = WeatherFetchStage::AirQuality;
+      weatherStageDueMs = millis() + NETWORK_STAGE_GAP_MS;
     } else {
       weatherFetchStage = WeatherFetchStage::RetryWait;
       weatherStageDueMs = millis() + WEATHER_RETRY_MS;
@@ -912,11 +944,7 @@ void networkTask(void *) {
         Serial.println(WiFi.softAPIP());
       }
     }
-    if (stationMode &&
-        wio_memo::ClockPolicy::intervalElapsed(millis(), lastNtpAttemptMs, NTP_RESYNC_MS)) {
-      lastNtpAttemptMs = millis();
-      syncNtp();
-    }
+    serviceNtp(millis());
     if (millis() - lastSnapshotMs >= 250) {
       lastSnapshotMs = millis();
       publishNetworkSnapshot();
@@ -944,8 +972,9 @@ void setup() {
   persistentStore.begin(taskList, deviceSettings);
   accessPointBootRequested = deviceSettings.reserved == START_ACCESS_POINT_ONCE;
   if (accessPointBootRequested) {
-    deviceSettings.reserved = BUNDLED_NETWORK_APPLIED;
-    persistentStore.saveSettings(taskList, deviceSettings);
+    wio_memo::DeviceSettings updated = deviceSettings;
+    updated.reserved = BUNDLED_NETWORK_APPLIED;
+    if (persistentStore.saveSettings(taskList, updated)) deviceSettings = updated;
   }
   applyBundledNetworkDefaults();
   rtc.begin();
@@ -1014,6 +1043,7 @@ void loop() {
       const bool wasStation = stationMode;
       updateNetwork();
       if (!wasStation && stationMode) startWeatherFetch(millis());
+      serviceNtp(millis());
       if (stationMode && !weatherFetchPending &&
           now - lastWeatherFetchMs >= WEATHER_REFRESH_MS) {
         startWeatherFetch(now);
