@@ -2,9 +2,24 @@
 
 > 基于 Seeed Studio Wio Terminal 的本地优先桌面信息终端：天气、时钟、待办提醒、局域网页面与离线小游戏。
 
-![Wio Memo 横向产品海报](assets/marketing/wio-memo-poster-wide.png)
+<p align="center">
+  <img src="assets/marketing/carousel/01-cover-real-device.png" width="520" alt="Wio Memo 产品宣传封面">
+</p>
 
-> 海报为依据实机照片重新制作的宣传渲染图，不是量产产品照片；屏幕数值用于版式展示。项目当前是可编译、可烧录的开源原型。
+> 宣传图依据实机照片重新渲染，设备采用 Wio Terminal 的真实结构与比例，不是量产产品照片；屏幕数值用于版式展示。项目当前是可编译、可烧录的开源原型。
+
+## 产品宣传图
+
+<table>
+  <tr>
+    <td width="50%"><img src="assets/marketing/carousel/01-cover-real-device.png" alt="Wio Memo 封面与产品概览"></td>
+    <td width="50%"><img src="assets/marketing/carousel/02-weather-clock.png" alt="天气与时钟功能页"></td>
+  </tr>
+  <tr>
+    <td width="50%"><img src="assets/marketing/carousel/03-local-web-reminders.png" alt="局域网配置与提醒功能页"></td>
+    <td width="50%"><img src="assets/marketing/carousel/04-offline-games.png" alt="离线界面与小游戏功能页"></td>
+  </tr>
+</table>
 
 ## 项目简介
 
