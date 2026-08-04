@@ -21,6 +21,27 @@
   </tr>
 </table>
 
+
+## 实物展示
+
+
+
+视频：https://b23.tv/NxXAX7X
+
+
+
+实物图：
+
+![wio-memo](README.assets/02f760d3ad527444fb6bc0db5091ca4b_720.jpg)
+
+
+
+电脑AP连接，web端：
+
+![ap-web](README.assets/67ae9806efa5ff86b4418cf0b297d7ec_720.png)
+
+
+
 ## 项目简介
 
 Wio Memo 把 Wio Terminal 做成一台无需云账号的桌面小终端。设备可以连接已有 Wi‑Fi，也能自行开启 AP 热点；手机或电脑只要和设备处于同一局域网，就能打开设备内置网页管理网络与事项。互联网不可用时，设备端菜单、已保存事项、RTC 时间、提醒逻辑和小游戏仍可工作。
