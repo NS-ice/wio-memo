@@ -33,7 +33,8 @@ class DeviceUi {
   void begin(const lv_font_t *bodyFont, const lv_font_t *titleFont, const lv_font_t *smallFont);
   void show(UiPage page);
   void update(const char *timeText, const char *networkText, const char *ipText,
-              const char *networkDetails, const char *dateText = "");
+              const char *networkDetails, const char *dateText = "",
+              const char *clockTimeText = nullptr);
   bool pollShortcuts(bool muted);
   UiAction takeAction();
   UiPage page() const { return page_; }
@@ -109,6 +110,7 @@ class DeviceUi {
   lv_obj_t *taskTimeLabel_ = nullptr;
   lv_obj_t *weatherScene_ = nullptr;
   lv_obj_t *weatherCityLabel_ = nullptr;
+  lv_obj_t *weatherCityChineseLabel_ = nullptr;
   lv_obj_t *weatherTemperatureLabel_ = nullptr;
   lv_obj_t *weatherConditionLabel_ = nullptr;
   lv_obj_t *weatherHumidityLabel_ = nullptr;
@@ -126,10 +128,11 @@ class DeviceUi {
   lv_obj_t *gameStatusLabel_ = nullptr;
   lv_obj_t *menuCards_[6]{};
   lv_obj_t *menuHintLabel_ = nullptr;
-  lv_obj_t *clockDigits_[4]{};
-  lv_obj_t *clockSegments_[4][7]{};
-  lv_obj_t *clockColon_[2]{};
+  lv_obj_t *clockDigits_[6]{};
+  lv_obj_t *clockSegments_[6][7]{};
+  lv_obj_t *clockColon_[4]{};
   lv_obj_t *clockSyncLabel_ = nullptr;
+  lv_obj_t *clockDateLabel_ = nullptr;
   lv_obj_t *standbyDigitCards_[4]{};
   lv_obj_t *standbyDigitLabels_[4]{};
   lv_obj_t *standbyColon_ = nullptr;
@@ -160,7 +163,7 @@ class DeviceUi {
   int16_t mascotBaseY_ = 0;
   uint16_t gameLights_ = 0x111;
   uint8_t gameMoves_ = 0;
-  char clockValues_[4] = {'?', '?', '?', '?'};
+  char clockValues_[6] = {'?', '?', '?', '?', '?', '?'};
   char standbyClockValues_[4] = {'?', '?', '?', '?'};
   uint8_t memoryValues_[8] = {1, 2, 3, 4, 1, 2, 3, 4};
   uint8_t memoryMatched_ = 0;

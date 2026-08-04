@@ -16,6 +16,8 @@ constexpr lv_color_t kMintSoft = LV_COLOR_MAKE(0xE2, 0xF4, 0xEF);
 constexpr lv_color_t kMintDark = LV_COLOR_MAKE(0x2D, 0x79, 0x73);
 constexpr lv_color_t kCream = LV_COLOR_MAKE(0xFF, 0xFC, 0xF4);
 constexpr lv_color_t kCoral = LV_COLOR_MAKE(0xFF, 0x82, 0x72);
+constexpr lv_color_t kWarmOrange = LV_COLOR_MAKE(0xE9, 0x78, 0x2D);
+constexpr lv_color_t kWarmInactive = LV_COLOR_MAKE(0xE9, 0xE0, 0xD3);
 constexpr lv_color_t kMutedInk = LV_COLOR_MAKE(0x68, 0x7B, 0x80);
 constexpr lv_color_t kClockOff = LV_COLOR_MAKE(0x2A, 0x45, 0x49);
 constexpr uint32_t kSplashDurationMs = 2600;
@@ -165,31 +167,58 @@ void DeviceUi::refreshStandbyClock(const char *timeText) {
 void DeviceUi::buildClock(bool standby) {
   screen_ = lv_obj_create(nullptr);
   setScreenBase(screen_);
-  lv_obj_set_style_bg_color(screen_, kInk, 0);
+  const lv_color_t warmBackground = LV_COLOR_MAKE(0xEE, 0xE6, 0xD8);
+  const lv_color_t warmWhite = LV_COLOR_MAKE(0xFF, 0xFC, 0xF5);
+  const lv_color_t orange = LV_COLOR_MAKE(0xE9, 0x78, 0x2D);
+  const lv_color_t darkInk = LV_COLOR_MAKE(0x1D, 0x1B, 0x18);
+  const lv_color_t inactive = LV_COLOR_MAKE(0xE9, 0xE0, 0xD3);
+  lv_obj_set_style_bg_color(screen_, warmBackground, 0);
   for (char &value : clockValues_) value = '?';
 
-  lv_obj_t *brand = lv_label_create(screen_);
-  lv_label_set_text(brand, standby ? "WIO MEMO - STANDBY" : "WIO MEMO - CLOCK");
-  lv_obj_set_style_text_font(brand, smallFont_, 0);
-  lv_obj_set_style_text_color(brand, kMint, 0);
-  lv_obj_align(brand, LV_ALIGN_TOP_MID, 0, 8);
+  lv_obj_t *city = lv_label_create(screen_);
+  lv_label_set_text(city, "Shenzhen");
+  lv_obj_set_style_text_font(city, titleFont_, 0);
+  lv_obj_set_style_text_color(city, darkInk, 0);
+  lv_obj_set_pos(city, 10, 4);
+  lv_obj_t *cityCn = lv_label_create(screen_);
+  lv_label_set_text(cityCn, "深圳市 · 本地时间");
+  lv_obj_set_style_text_font(cityCn, smallFont_, 0);
+  lv_obj_set_style_text_color(cityCn, kMutedInk, 0);
+  lv_obj_set_pos(cityCn, 10, 29);
+  clockDateLabel_ = lv_label_create(screen_);
+  lv_obj_set_width(clockDateLabel_, 154);
+  lv_obj_set_style_text_align(clockDateLabel_, LV_TEXT_ALIGN_RIGHT, 0);
+  lv_obj_set_style_text_font(clockDateLabel_, smallFont_, 0);
+  lv_obj_set_style_text_color(clockDateLabel_, kMutedInk, 0);
+  lv_obj_set_pos(clockDateLabel_, 156, 23);
 
-  const int16_t xs[4] = {22, 84, 174, 236};
-  for (uint8_t digit = 0; digit < 4; ++digit) {
+  lv_obj_t *panel = lv_obj_create(screen_);
+  lv_obj_set_pos(panel, 8, 53);
+  lv_obj_set_size(panel, 304, 112);
+  lv_obj_set_style_radius(panel, 18, 0);
+  lv_obj_set_style_border_width(panel, 0, 0);
+  lv_obj_set_style_bg_color(panel, warmWhite, 0);
+  lv_obj_set_style_shadow_width(panel, 12, 0);
+  lv_obj_set_style_shadow_opa(panel, LV_OPA_20, 0);
+  lv_obj_set_style_pad_all(panel, 0, 0);
+  lv_obj_clear_flag(panel, LV_OBJ_FLAG_SCROLLABLE);
+
+  const int16_t xs[6] = {10, 52, 112, 154, 214, 256};
+  for (uint8_t digit = 0; digit < 6; ++digit) {
     lv_obj_t *card = lv_obj_create(screen_);
     clockDigits_[digit] = card;
-    lv_obj_set_pos(card, xs[digit], 40);
-    lv_obj_set_size(card, 60, 100);
-    lv_obj_set_style_radius(card, 12, 0);
+    lv_obj_set_pos(card, xs[digit], 70);
+    lv_obj_set_size(card, 40, 78);
+    lv_obj_set_style_radius(card, 9, 0);
     lv_obj_set_style_border_width(card, 1, 0);
-    lv_obj_set_style_border_color(card, LV_COLOR_MAKE(0x3D, 0x59, 0x5D), 0);
-    lv_obj_set_style_bg_color(card, LV_COLOR_MAKE(0x19, 0x2D, 0x33), 0);
+    lv_obj_set_style_border_color(card, LV_COLOR_MAKE(0xED, 0xE4, 0xD7), 0);
+    lv_obj_set_style_bg_color(card, LV_COLOR_MAKE(0xFB, 0xF7, 0xEF), 0);
     lv_obj_set_style_pad_all(card, 0, 0);
     lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
-    const int16_t sx[7] = {10, 47, 47, 10, 5, 5, 10};
-    const int16_t sy[7] = {8, 13, 54, 87, 54, 13, 47};
-    const int16_t sw[7] = {40, 7, 7, 40, 7, 7, 40};
-    const int16_t sh[7] = {7, 35, 35, 7, 35, 35, 7};
+    const int16_t sx[7] = {8, 31, 31, 8, 3, 3, 8};
+    const int16_t sy[7] = {6, 10, 41, 67, 41, 10, 36};
+    const int16_t sw[7] = {24, 5, 5, 24, 5, 5, 24};
+    const int16_t sh[7] = {5, 27, 27, 5, 27, 27, 5};
     for (uint8_t segment = 0; segment < 7; ++segment) {
       lv_obj_t *bar = lv_obj_create(card);
       clockSegments_[digit][segment] = bar;
@@ -197,58 +226,65 @@ void DeviceUi::buildClock(bool standby) {
       lv_obj_set_size(bar, sw[segment], sh[segment]);
       lv_obj_set_style_radius(bar, 4, 0);
       lv_obj_set_style_border_width(bar, 0, 0);
-      lv_obj_set_style_bg_color(bar, LV_COLOR_MAKE(0x2A, 0x45, 0x49), 0);
+      lv_obj_set_style_bg_color(bar, inactive, 0);
       lv_obj_clear_flag(bar, LV_OBJ_FLAG_SCROLLABLE);
     }
     lv_obj_t *split = lv_obj_create(card);
-    lv_obj_set_pos(split, 2, 49);
-    lv_obj_set_size(split, 56, 2);
+    lv_obj_set_pos(split, 2, 38);
+    lv_obj_set_size(split, 36, 1);
     lv_obj_set_style_border_width(split, 0, 0);
-    lv_obj_set_style_bg_color(split, LV_COLOR_MAKE(0x0F, 0x22, 0x27), 0);
+    lv_obj_set_style_bg_color(split, LV_COLOR_MAKE(0xDC, 0xD3, 0xC7), 0);
     lv_obj_clear_flag(split, LV_OBJ_FLAG_SCROLLABLE);
   }
   uint8_t colonIndex = 0;
-  const int16_t colonY[2] = {68, 105};
-  for (int16_t y : colonY) {
-    lv_obj_t *dot = lv_obj_create(screen_);
-    clockColon_[colonIndex++] = dot;
-    lv_obj_set_pos(dot, 157, y);
-    lv_obj_set_size(dot, 8, 8);
-    lv_obj_set_style_radius(dot, LV_RADIUS_CIRCLE, 0);
-    lv_obj_set_style_border_width(dot, 0, 0);
-    lv_obj_set_style_bg_color(dot, kCoral, 0);
-    lv_obj_clear_flag(dot, LV_OBJ_FLAG_SCROLLABLE);
+  const int16_t colonX[2] = {99, 201};
+  const int16_t colonY[2] = {92, 118};
+  for (int16_t x : colonX) {
+    for (int16_t y : colonY) {
+      lv_obj_t *dot = lv_obj_create(screen_);
+      clockColon_[colonIndex++] = dot;
+      lv_obj_set_pos(dot, x, y);
+      lv_obj_set_size(dot, 7, 7);
+      lv_obj_set_style_radius(dot, LV_RADIUS_CIRCLE, 0);
+      lv_obj_set_style_border_width(dot, 0, 0);
+      lv_obj_set_style_bg_color(dot, orange, 0);
+      lv_obj_clear_flag(dot, LV_OBJ_FLAG_SCROLLABLE);
+    }
   }
   clockSyncLabel_ = lv_label_create(screen_);
   lv_obj_set_style_text_font(clockSyncLabel_, smallFont_, 0);
-  lv_obj_set_style_text_color(clockSyncLabel_, kMint, 0);
-  lv_obj_align(clockSyncLabel_, LV_ALIGN_BOTTOM_MID, 0, -43);
+  lv_obj_set_style_text_color(clockSyncLabel_, kMintDark, 0);
+  lv_obj_align(clockSyncLabel_, LV_ALIGN_BOTTOM_MID, 0, -42);
   addTip(screen_, standby ? "小贴士：轻按任意键即可唤醒" :
                             "小贴士：联网后会自动校准时间");
 }
 
 void DeviceUi::refreshClock(const char *timeText) {
   if (!clockDigits_[0]) return;
-  const bool valid = timeText && strlen(timeText) >= 5 && timeText[2] == ':';
-  const char values[4] = {valid ? timeText[0] : '-', valid ? timeText[1] : '-',
-                          valid ? timeText[3] : '-', valid ? timeText[4] : '-'};
+  const bool valid = timeText && strlen(timeText) >= 8 && timeText[2] == ':' &&
+                     timeText[5] == ':';
+  const char values[6] = {valid ? timeText[0] : '-', valid ? timeText[1] : '-',
+                          valid ? timeText[3] : '-', valid ? timeText[4] : '-',
+                          valid ? timeText[6] : '-', valid ? timeText[7] : '-'};
   static constexpr uint8_t masks[10] = {0x3F, 0x06, 0x5B, 0x4F, 0x66,
                                          0x6D, 0x7D, 0x07, 0x7F, 0x6F};
   const lv_opa_t colonOpacity = ((millis() / 500U) & 1U) ? LV_OPA_40 : LV_OPA_COVER;
   for (lv_obj_t *dot : clockColon_) if (dot) lv_obj_set_style_bg_opa(dot, colonOpacity, 0);
-  for (uint8_t digit = 0; digit < 4; ++digit) {
+  for (uint8_t digit = 0; digit < 6; ++digit) {
     if (clockValues_[digit] == values[digit]) continue;
     clockValues_[digit] = values[digit];
     const uint8_t mask = values[digit] >= '0' && values[digit] <= '9'
                              ? masks[values[digit] - '0'] : 0;
     for (uint8_t segment = 0; segment < 7; ++segment) {
+      lv_color_t segmentColor = kWarmInactive;
+      if (mask & (1U << segment)) segmentColor = digit < 4 ? kWarmOrange : kMintDark;
       lv_obj_set_style_bg_color(clockSegments_[digit][segment],
-                                mask & (1U << segment) ? kMint : kClockOff, 0);
+                                segmentColor, 0);
     }
     lv_anim_t animation;
     lv_anim_init(&animation);
     lv_anim_set_var(&animation, clockDigits_[digit]);
-    lv_anim_set_values(&animation, 34, 40);
+    lv_anim_set_values(&animation, 66, 70);
     lv_anim_set_time(&animation, 180);
     lv_anim_set_path_cb(&animation, lv_anim_path_ease_out);
     lv_anim_set_exec_cb(&animation, [](void *object, int32_t y) {
@@ -452,17 +488,17 @@ void DeviceUi::buildHome() {
   lv_obj_set_style_text_color(weatherCityLabel_, darkInk, 0);
   lv_obj_set_pos(weatherCityLabel_, 10, 4);
   lv_obj_t *locationDot = lv_obj_create(screen_);
-  lv_obj_set_pos(locationDot, 101, 10);
+  lv_obj_set_pos(locationDot, 108, 10);
   lv_obj_set_size(locationDot, 8, 8);
   lv_obj_set_style_radius(locationDot, LV_RADIUS_CIRCLE, 0);
   lv_obj_set_style_border_width(locationDot, 0, 0);
   lv_obj_set_style_bg_color(locationDot, orange, 0);
   lv_obj_clear_flag(locationDot, LV_OBJ_FLAG_SCROLLABLE);
-  lv_obj_t *cityCn = lv_label_create(screen_);
-  lv_label_set_text(cityCn, "上海市");
-  lv_obj_set_style_text_font(cityCn, smallFont_, 0);
-  lv_obj_set_style_text_color(cityCn, kMutedInk, 0);
-  lv_obj_set_pos(cityCn, 10, 27);
+  weatherCityChineseLabel_ = lv_label_create(screen_);
+  lv_label_set_text(weatherCityChineseLabel_, "深圳市");
+  lv_obj_set_style_text_font(weatherCityChineseLabel_, smallFont_, 0);
+  lv_obj_set_style_text_color(weatherCityChineseLabel_, kMutedInk, 0);
+  lv_obj_set_pos(weatherCityChineseLabel_, 10, 27);
   for (uint8_t dot = 0; dot < 4; ++dot) {
     lv_obj_t *pageDot = lv_obj_create(screen_);
     lv_obj_set_pos(pageDot, 10 + dot * 11, 45);
@@ -700,7 +736,10 @@ void DeviceUi::setWeather(const char *city, int16_t temperature, uint8_t humidit
   char text[40]{};
   snprintf(text, sizeof(text), "%d°C", weatherTemperature_);
   lv_label_set_text(weatherTemperatureLabel_, text);
-  lv_label_set_text(weatherCityLabel_, weatherCity_);
+  const bool shenzhen = strstr(weatherCity_, "深圳") != nullptr;
+  lv_label_set_text(weatherCityLabel_, shenzhen ? "Shenzhen" : weatherCity_);
+  if (weatherCityChineseLabel_)
+    lv_label_set_text(weatherCityChineseLabel_, shenzhen ? "深圳市" : weatherCity_);
   lv_label_set_text(weatherConditionLabel_, weatherName(weatherKind_));
   lv_label_set_text(weatherSourceLabel_, weatherLive_ ? "实时天气" : "离线预览");
   snprintf(text, sizeof(text), "%u%%", weatherHumidity_);
@@ -720,7 +759,7 @@ void DeviceUi::showWeatherPreview(int8_t direction) {
   weatherPreviewIndex_ = static_cast<uint8_t>((weatherPreviewIndex_ + direction + count) % count);
   static const int8_t temperatures[7] = {28, 26, 24, 21, 23, -2, 18};
   static const uint8_t humidity[7] = {45, 58, 64, 86, 82, 79, 91};
-  setWeather("天气预览", temperatures[weatherPreviewIndex_], humidity[weatherPreviewIndex_],
+  setWeather("深圳", temperatures[weatherPreviewIndex_], humidity[weatherPreviewIndex_],
              32 + weatherPreviewIndex_ * 5, 8 + weatherPreviewIndex_ * 2,
              weatherPreviewIndex_, false);
 }
@@ -1349,6 +1388,7 @@ void DeviceUi::show(UiPage page) {
   taskListLabel_ = nullptr;
   weatherScene_ = nullptr;
   weatherCityLabel_ = nullptr;
+  weatherCityChineseLabel_ = nullptr;
   weatherTemperatureLabel_ = nullptr;
   weatherConditionLabel_ = nullptr;
   weatherHumidityLabel_ = nullptr;
@@ -1371,6 +1411,7 @@ void DeviceUi::show(UiPage page) {
   for (auto &segments : clockSegments_) for (lv_obj_t *&segment : segments) segment = nullptr;
   for (lv_obj_t *&dot : clockColon_) dot = nullptr;
   clockSyncLabel_ = nullptr;
+  clockDateLabel_ = nullptr;
   for (lv_obj_t *&card : standbyDigitCards_) card = nullptr;
   for (lv_obj_t *&label : standbyDigitLabels_) label = nullptr;
   standbyColon_ = nullptr;
@@ -1403,7 +1444,8 @@ void DeviceUi::show(UiPage page) {
 }
 
 void DeviceUi::update(const char *timeText, const char *networkText, const char *ipText,
-                      const char *networkDetails, const char *dateText) {
+                      const char *networkDetails, const char *dateText,
+                      const char *clockTimeText) {
   const uint32_t now = millis();
   if (page_ == UiPage::Splash && now - pageStartedMs_ >= kSplashDurationMs) {
     show(UiPage::Home);
@@ -1419,7 +1461,7 @@ void DeviceUi::update(const char *timeText, const char *networkText, const char 
     const int16_t bob = ((now / 650) & 1U) ? 2 : 0;
     lv_obj_set_y(mascotImage_, mascotBaseY_ + bob);
   }
-  if (page_ == UiPage::Clock) refreshClock(timeText);
+  if (page_ == UiPage::Clock) refreshClock(clockTimeText ? clockTimeText : timeText);
   if (page_ == UiPage::Standby) refreshStandbyClock(timeText);
   if (page_ == UiPage::GameMemory && memoryHideAtMs_ &&
       static_cast<int32_t>(now - memoryHideAtMs_) >= 0) {
@@ -1434,6 +1476,7 @@ void DeviceUi::update(const char *timeText, const char *networkText, const char 
                  (strcmp(networkText, "连接中") == 0 || strcmp(networkText, "开启中") == 0);
   if (timeLabel_) lv_label_set_text(timeLabel_, timeText);
   if (weatherDateLabel_ && dateText) lv_label_set_text(weatherDateLabel_, dateText);
+  if (clockDateLabel_ && dateText) lv_label_set_text(clockDateLabel_, dateText);
   refreshNetworkBadge(networkText);
   if (page_ == UiPage::Network && detailLabel_ &&
       strcmp(lv_label_get_text(detailLabel_), networkSummary_) != 0) {

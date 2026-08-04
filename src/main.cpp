@@ -117,6 +117,7 @@ NetworkSnapshot networkSnapshot{};
 
 String networkIp();
 String formatTime(uint32_t utc, bool includeDate = false);
+String formatClockTime(uint32_t utc);
 void publishNetworkSnapshot();
 void startWeatherFetch(uint32_t now);
 void serviceWeatherFetch(uint32_t now);
@@ -808,6 +809,13 @@ String formatTime(uint32_t utc, bool includeDate) {
   return result + twoDigits(local.hour()) + ":" + twoDigits(local.minute());
 }
 
+String formatClockTime(uint32_t utc) {
+  if (!utc) return "--:--:--";
+  DateTime local(wio_memo::ClockPolicy::toLocalEpoch(utc, deviceSettings.utcOffsetMinutes));
+  return twoDigits(local.hour()) + ":" + twoDigits(local.minute()) + ":" +
+         twoDigits(local.second());
+}
+
 String formatDashboardDate(uint32_t utc) {
   if (!utc) return "等待对时";
   DateTime local(wio_memo::ClockPolicy::toLocalEpoch(utc, deviceSettings.utcOffsetMinutes));
@@ -858,9 +866,11 @@ void runUiCycle() {
     if (millis() - lastDisplayMs >= UI_STATUS_REFRESH_MS) {
       lastDisplayMs = millis();
       const String time = formatTime(nowUtc());
+      const String clockTime = formatClockTime(nowUtc());
       const String date = formatDashboardDate(nowUtc());
       const NetworkSnapshot snapshot = readNetworkSnapshot();
-      deviceUi.update(time.c_str(), snapshot.label, snapshot.ip, snapshot.details, date.c_str());
+      deviceUi.update(time.c_str(), snapshot.label, snapshot.ip, snapshot.details, date.c_str(),
+                      clockTime.c_str());
     }
     lvglPort.update(millis());
 }
