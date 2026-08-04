@@ -1,115 +1,118 @@
-# Wio Memo 定制系统架构
+# Wio Memo 系统架构
 
-## 1. 架构决策
+## 1. 架构定位
 
-MVP 采用 Local-first 单设备架构：Wio Terminal 既是显示/提醒终端，也是局域网 HTTP 服务和数据权威源。这样无需云服务即可工作，断网不影响核心提醒，也符合 SAMD51 和 RTL8720DN 的资源边界。
+Wio Memo 采用 Local-first 单设备架构。Wio Terminal 同时承担显示、输入、提醒、数据存储和局域网 HTTP 服务；互联网仅用于天气与时间更新。断网不应破坏设备端核心能力。
 
-中文字库确定使用板载 4 MB QSPI Flash，不要求用户安装 microSD 卡。字体采用 WMF1 定长单色点阵格式，索引按 Unicode 码点排序，设备通过 UTF-8 解码和二分查找按需读取字形。microSD 仅保留为未来的数据备份或完整字体扩展选项。
+中文字库放在板载 4 MB QSPI Flash，不要求 SD 卡。任务、网络设置和提醒标记使用 SAMD51 Flash 持久化。
 
-## 2. 分层结构
+## 2. 运行组成
 
-```text
-┌──────────────── Web Browser ────────────────┐
-│ Today UI / Editor / Settings / Provisioning │
-└────────────────── HTTP/JSON ────────────────┘
-                         │
-┌──────────────── Wio Terminal ───────────────┐
-│ Presentation                               │
-│  TFT Views │ Input Mapper │ Buzzer Patterns │
-├─────────────────────────────────────────────┤
-│ Application                                │
-│  TaskService │ ReminderEngine │ SyncService │
-│  ProvisioningService │ DeviceStateMachine   │
-├─────────────────────────────────────────────┤
-│ Domain                                     │
-│  Task │ DeviceConfig │ AlertState │ Clock    │
-├─────────────────────────────────────────────┤
-│ Infrastructure                             │
-│  rpcWiFi/WebServer │ NTP │ RTC │ FlashStore │
-│  TFT_eSPI │ GPIO/PWM │ Watchdog │ Logger     │
-└─────────────────────────────────────────────┘
+```mermaid
+flowchart LR
+    Browser["手机 / 电脑浏览器"] -->|"HTTP + JSON"| Web["内嵌 WebServer"]
+    Web --> App["任务与配置服务"]
+    Keys["摇杆 / 按键"] --> UI["LVGL UI"]
+    Weather["Open-Meteo\n深圳坐标"] --> Network["网络状态机"]
+    Network --> App
+    App --> UI
+    App --> Persist["Flash 双槽 + CRC"]
+    RTC["板载 RTC"] --> App
+    Font["QSPI WMF1 字库"] --> UI
+    App --> Buzzer["非阻塞蜂鸣器"]
 ```
 
-## 3. 运行状态机
+## 3. 代码分层
+
+| 层 | 目录 | 责任 |
+| --- | --- | --- |
+| Domain | `include/wio_memo/domain` | Task、状态、容量和提醒标记 |
+| Application | `src/application` | 排序、替换、提醒判定、Snooze 与时间策略 |
+| Infrastructure | `src/infrastructure` | CRC32、Flash 双槽、QSPI 字库 |
+| Presentation | `src/presentation` | LVGL 页面、LCD 端口、字体适配、蜂鸣器与游戏 |
+| Composition | `src/main.cpp` | 硬件初始化、Wi‑Fi/AP、Web API、天气和运行调度 |
+
+当前 Web 页面以内嵌字符串形式位于 presentation 接口中，没有独立的前端构建产物。
+
+## 4. 默认调度模型
+
+当前默认构建设置 `SAFE_UI_ONLY_MODE = true`，采用协作式主循环：
 
 ```text
-BOOT
- ├─ no config ─> PROVISIONING_AP ─> save config ─> RESTART
- └─ configured ─> CONNECTING
-                    ├─ success ─> ONLINE
-                    └─ timeout ─> OFFLINE_READY
-
-ONLINE/OFFLINE_READY
- ├─ reminder due ─> ALERTING ─> confirmed/snoozed ─> previous state
- ├─ Wi-Fi lost ─> OFFLINE_READY ─> background reconnect ─> ONLINE
- └─ fatal fault ─> watchdog restart ─> BOOT
+loop
+ ├─ 处理按键、LVGL、提醒与蜂鸣器
+ ├─ 推进 STA/AP/离线切换状态机
+ ├─ 处理一小步 Web/DNS 请求
+ ├─ 到期时推进天气请求阶段
+ └─ 更新只读网络快照
 ```
 
-网络连接、Web 请求、屏幕刷新、按键扫描和提醒检查必须采用非阻塞调度。任何联网操作都不能长时间占用主循环，以免错过按键和提醒。
+仓库保留 FreeRTOS `uiTask` 与 `networkTask` 路径以及 SysTick 转发代码，但默认没有启用。此前实机在无线切换和任务调度组合下出现过卡死，因此当前稳定策略优先减少并发复杂度。只有完成系统回归后，才能重新评估双任务路径。
 
-## 4. 建议代码目录
+## 5. 网络状态机
 
-```text
-src/
-  main.cpp                    组合根与调度器
-  domain/task.h               领域模型和校验
-  application/task_service.*  CRUD、排序、完成
-  application/reminder.*      提醒与稍后提醒状态机
-  application/clock.*         UTC、本地时区和校时策略
-  infrastructure/storage.*    双槽存储、版本、CRC、迁移
-  infrastructure/network.*    STA/AP、退避重连、NTP
-  infrastructure/web_api.*    REST 路由、鉴权、输入限制
-  presentation/display.*      页面与局部刷新
-  presentation/input.*        消抖、短按/长按映射
-  presentation/buzzer.*       非阻塞声音序列
-web/
-  index.html
-  app.js
-  styles.css
-tools/
-  embed_web.py                构建时压缩并嵌入 Web 资源
-test/
-  native/                     时间、排序、提醒、序列化单元测试
+```mermaid
+stateDiagram-v2
+    [*] --> LocalUI
+    LocalUI --> Connecting: 有已保存 Wi-Fi
+    LocalUI --> AP: 无配置 / 请求热点
+    Connecting --> STA: 连接成功
+    Connecting --> AP: 超时或请求热点
+    STA --> Switching: 切换模式
+    AP --> Switching: 切换模式
+    Switching --> Connecting: 连接 Wi-Fi
+    Switching --> AP: 开启热点
+    Switching --> Offline: 关闭无线
+    Offline --> Switching: 用户请求联网
 ```
 
-## 5. 存储设计
+无线切换采用“停止旧模式 → 等待芯片稳定 → 启动新模式”的分阶段过程。连接超时约 10 秒；整个过程中 UI 主循环继续运行。
 
-- 配置和事项分开存储，避免改任务时反复重写 Wi-Fi 凭据。
-- 使用 A/B 双槽：每槽包含 magic、schemaVersion、sequence、payloadLength、CRC32。
-- 写入新槽成功并校验后才切换 sequence，掉电时读取最新有效槽。
-- 提醒状态必须持久化，确保重启不会重复提醒。
-- Wi-Fi 密码不通过普通任务 API 返回；恢复出厂设置才清除。
-- 高频状态（当前选择行、屏幕页）只放 RAM，不写 Flash。
+AP 地址固定为 `192.168.5.1`，并处理常见 Portal 探测路径。STA 成功后网页地址由 DHCP 分配的设备 IP 决定。
 
-## 6. 时间与提醒设计
+## 6. 天气与时间
 
-- 存储和 API 统一使用 UTC Unix 秒；显示时才应用时区。
-- RTC 为离线运行时钟，NTP 是校准源；联网启动和每 6 小时校准。
-- ReminderEngine 每 200 ms 检查一个排序后的最近提醒，不遍历无关历史项。
-- 提醒事件有稳定事件键：`taskId + dueUtc + alertType`，并记录 fired/acknowledged/snoozed。
-- NTP 大幅校时后重新计算待触发事件，但不重放已经确认的事件。
-- 蜂鸣器使用非阻塞节拍器，不使用 `delay()` 生成整段声音。
+- 默认城市：深圳。
+- 默认坐标：约 `22.5431, 114.0579`。
+- 数据源：Open‑Meteo forecast API。
+- 刷新：成功后约 30 分钟；失败后约 5 分钟重试。
+- 展示：当前温度、湿度、天气代码、风速与未来三天高低温。
+- 校时：forecast 响应中的本地时间用于调整 RTC。
+- IP 定位和 AQI 函数存在，但默认稳定流程尚未启用。
 
-## 7. API 草案
+为规避 `rpcWiFi` DNS 长阻塞，forecast 请求当前使用已知 IPv4 地址并显式发送 `Host` 头。这一做法需要持续关注上游地址变化，不应视为长期理想方案。
 
-| 方法 | 路径 | 用途 |
-|---|---|---|
-| GET | `/api/v1/device` | 状态、时间、版本、网络 |
-| GET | `/api/v1/tasks` | 列表，支持状态筛选 |
-| POST | `/api/v1/tasks` | 创建事项 |
-| PATCH | `/api/v1/tasks/{id}` | 局部编辑/完成 |
-| DELETE | `/api/v1/tasks/{id}` | 删除事项 |
-| POST | `/api/v1/tasks/{id}/snooze` | 稍后提醒 |
-| POST | `/api/v1/time/sync` | 手动 NTP 校时 |
-| GET/PUT | `/api/v1/settings` | 非敏感设置 |
-| POST | `/api/v1/provision` | 仅配网模式写入网络配置 |
+## 7. 存储设计
 
-所有写请求校验 Content-Type、body 大小、字段范围和本地访问令牌。API 采用明确版本号，避免未来 Web 与固件升级不一致。
+- 任务与设备配置使用带 schema、sequence 与 CRC32 的逻辑双槽。
+- 新数据校验成功后才成为最新有效槽。
+- 最多保存 12 条任务，标题最多 48 个 UTF‑8 字节。
+- 提醒触发标记随任务持久化，避免重启重放。
+- STA 密码不会通过状态 API 返回，也不会写入 Git；当前 AP 密码会通过 `/api/device` 返回给本地网络页，这是需要在后续鉴权设计中修正的原型安全边界。
+- 高频 UI 状态只保存在 RAM。
 
-## 8. 构建与测试框架
+## 8. 字体与显示
 
-- PlatformIO 提供 `device` 与 `native` 两个环境。
-- 领域层不依赖 Arduino，可在本机测试提醒边界、跨天、过期、NTP 跳变和存储迁移。
-- Web 静态资源单独 lint/test，再在构建阶段压缩为 gzip/PROGMEM。
-- 真机测试覆盖：首次配网、错误密码、AP/STA 切换、断网重连、断电恢复、蜂鸣器静音、按键消抖、连续运行 7 天。
-- 每个里程碑生成可烧录 BIN/UF2、版本号、变更日志和验收记录。
+QSPI 字体包包含 12、16、20 px 三套 WMF1 字库，总大小约 956,130 字节。每套包含 7,445 个字符，设备以 UTF‑8 解码、Unicode 二分查找和 LVGL 字体回调按需取字。
+
+LVGL 使用局部缓冲与脏矩形刷新，不分配完整 320×240 RGB565 帧缓冲。UI 页面切换时重建设备对象；持续动画限制在小区域。
+
+## 9. 当前 API
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| `GET` | `/api/device` | 网络、IP、时间、天气和设置状态 |
+| `GET` | `/api/wifi/scan` | 扫描附近网络 |
+| `PUT` | `/api/network` | 保存 STA/AP/时区并计划连接 |
+| `PUT` | `/api/network/mode` | 切换 `station` / `ap` / `offline` |
+| `GET` | `/api/tasks` | 读取全部任务 |
+| `PUT` | `/api/tasks` | 校验并替换全部任务 |
+
+API 当前没有版本前缀、鉴权和 TLS。带 `/api/v1` 的 REST 设计属于后续演进方案，不是现有接口。
+
+## 10. 资源与风险
+
+- 最近 Release 构建约占 61% RAM、90% 主程序 Flash。
+- QSPI 字库不占用主程序 Flash，但初始化和字形缓存会消耗 RAM/总线时间。
+- 主要风险是 `rpcWiFi` 阻塞、模式切换、固定 forecast IP、Flash 容量余量和缺少长期运行记录。
+- 新功能优先通过删除重复资源、压缩字符串和减少依赖获得空间，不直接叠加大型库。
